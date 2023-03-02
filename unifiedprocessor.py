@@ -4,7 +4,6 @@ import gzip
 import json
 import os
 import shutil
-import string
 from pathlib import Path
 from random import sample
 from time import perf_counter
@@ -15,10 +14,10 @@ import urllib3
 import urllib3.exceptions
 import xmltodict
 
-_OpenFile = TypeVar("_OpenFile", str, Path)
+_Path = TypeVar("_Path", str, Path)
 
 
-def fast_line_count(file: _OpenFile, has_header: bool = False) -> int:
+def fast_line_count(file: _Path, has_header: bool = False) -> int:
     """Counts the number of newlines in a file using an 8MB buffer
 
     file: file to count lines of
@@ -48,36 +47,39 @@ def upw_request(doi: str, email: str = "unpaywall_01@example.com") -> dict:
     http = urllib3.PoolManager()
     response = http.request("GET", url)
 
-    jsondata: dict = json.loads(response.data)
+    json_data: dict = json.loads(response.data)
 
-    if "error" in jsondata:
+    if "error" in json_data:
         return {}
-    return jsondata
+    return json_data
 
 
-def pmc_request(pmcid: str) -> dict:
+def pmc_request(pmc_id: str) -> dict:
     """Performs a request via the OA API
 
     pmcid: PubMedCentral ID
     """
 
-    url = f"https://www.ncbi.nlm.nih.gov/pmc/utils/oa/oa.fcgi?id={pmcid}&format=pdf"
+    url = f"https://www.ncbi.nlm.nih.gov/pmc/utils/oa/oa.fcgi?id={pmc_id}&format=pdf"
     retry = True
     http = urllib3.PoolManager()
-    datadict = {}
+    data_dict = {}
 
     while retry:
         try:
             response = http.request("GET", url)
-            datadict = xmltodict.parse(response.data)
+            data_dict = xmltodict.parse(response.data)
             retry = False
         except urllib3.exceptions.MaxRetryError:
             pass
-    return datadict
+    return data_dict
 
 
 def unified_processor(
-    csvfile, samplesize: int = 800, email: str = "unpaywall_01@example.com"
+    field: str,
+    year: int,
+    sample_size: int = 800,
+    email: str = "unpaywall_01@example.com",
 ):
     """Produces UPW and PMC format files for BGH
 
@@ -85,8 +87,6 @@ def unified_processor(
     email: email address for UPW calls
     samplesize: sampling size
     """
-    outfile = str(os.path.basename(csvfile)).removesuffix(".csv")
-    field = outfile.translate(str.maketrans("", "", string.digits))
 
     if not os.path.exists(Path(f"./output/{field}")):
         os.makedirs(Path(f"./output/{field}"))
@@ -94,28 +94,30 @@ def unified_processor(
     if not os.path.exists(Path(f"./reports/{field}")):
         os.makedirs(Path(f"./reports/{field}"))
 
-    jsonlfile = Path(f"./output/{field}/{outfile}-UPW.jsonl")
-    txtfile = Path(f"./output/{field}/{outfile}-PMC.txt")
-    dump_path = Path(f"./reports/{field}/{outfile}-dump.csv")
+    csv_file = Path(f"./input/{field}/{field}{year}.csv")
+    jsonl_file = Path(f"./output/{field}/{field}{year}-UPW.jsonl")
+    txt_file = Path(f"./output/{field}/{field}{year}-PMC.txt")
+    dump_path = Path(f"./reports/{field}/{field}{year}-dump.csv")
 
-    line_count = fast_line_count(csvfile, True)
+    line_count = fast_line_count(csv_file, True)
 
     print(f"{line_count} entries.")
 
-    # samples k = samplesize positions from the number of lines
-    if samplesize is not None:
-        samplesize = samplesize if samplesize < line_count else (line_count - 1)
-        selection = sample(range(1, line_count + 2), samplesize)
-        selection.sort()
-    print(f"Processing {samplesize} samples of {csvfile}")
-    startprocess = perf_counter()
-    with open(csvfile, "r", encoding="utf-8") as csv_file, jsonlines.open(
-        jsonlfile, mode="w"
-    ) as jsonlwriter, open(dump_path, "w", encoding="utf-8") as dumpfile, open(
-        txtfile, "w", encoding="ascii"
-    ) as txtwriter:
+    # creates a sorted list of line numbers to avoid storing entire csv files to memory
+    sample_size = sample_size if sample_size < line_count else (line_count - 1)
+    selection: list[int] = sample(range(1, line_count + 2), sample_size)
+    selection.sort()
+
+    print(f"Processing {sample_size} samples of {csv_file}")
+    start_time = perf_counter()
+
+    with open(csv_file, "r", encoding="utf-8") as csv_file, jsonlines.open(
+        jsonl_file, mode="w"
+    ) as jsonl_writer, open(dump_path, "w", encoding="utf-8") as dump_file, open(
+        txt_file, "w", encoding="ascii"
+    ) as txt_writer:
         # Creates a dummy line for biblio-glutton-harvester
-        txtwriter.write("DatePlaceholder\n")
+        txt_writer.write("DatePlaceholder\n")
 
         # initialize counts
         count: dict[str, int] = {
@@ -129,11 +131,10 @@ def unified_processor(
         position = 0
         sample_position = 0
 
-        csvreader = csv.reader(csv_file)
-        dumpwriter = csv.writer(dumpfile, dialect="unix")
+        dump_writer = csv.writer(dump_file, dialect="unix")
 
-        for row in csvreader:
-            if sample_position == samplesize:
+        for row in csv.reader(csv_file):
+            if sample_position == sample_size:
                 break
             # skips header
             if position == 0:
@@ -146,16 +147,16 @@ def unified_processor(
             count["total"] += 1
 
             # sets up fields for unpaywall and PMC API
-            pmcid = row[8]
-            pmid = row[0]
+            pmc_id = row[8]
+            pubmed_id = row[0]
             doi = row[10]
 
             print(f"Processing entry {count['total']}", end="\r")
 
             if bool(doi):
-                jsondata = upw_request(doi, email)
-                if bool(jsondata):
-                    jsonlwriter.write(jsondata)
+                json_data = upw_request(doi, email)
+                if bool(json_data):
+                    jsonl_writer.write(json_data)
 
                     count["upw"] += 1
 
@@ -164,22 +165,22 @@ def unified_processor(
                     continue
 
             # discards PMC ids that didn't return pmids
-            if pmid == "":
+            if pubmed_id == "":
                 count["discard"] += 1
 
                 sample_position += 1
                 position += 1
                 continue
-            datadict = pmc_request(pmcid)
+            data_dict = pmc_request(pmc_id)
 
             path = None
-            if "error" not in datadict["OA"]:
-                path = datadict["OA"]["records"]["record"]["link"]["@href"]
+            if "error" not in data_dict["OA"]:
+                path = data_dict["OA"]["records"]["record"]["link"]["@href"]
             # discards papers with no pdf available
             if path is None:
                 count["no_pdf"] += 1
-                dumplist = [doi, pmcid]
-                dumpwriter.writerow(dumplist)
+                dump_list = [doi, pmc_id]
+                dump_writer.writerow(dump_list)
 
                 position += 1
                 sample_position += 1
@@ -188,45 +189,45 @@ def unified_processor(
             subpath: str = path.removeprefix("ftp://ftp.ncbi.nlm.nih.gov/pub/pmc/")
 
             # line formatting for entry into output txt file
-            outputline = (
+            output_line = (
                 f"{subpath}\t"
                 "CitationPlaceholder\t"
-                f"{pmcid}\t"
-                f"PMID:{pmid}\t"
+                f"{pmc_id}\t"
+                f"PMID:{pubmed_id}\t"
                 "LicensePlaceholder\n"
             )
 
-            txtwriter.write(outputline)
+            txt_writer.write(output_line)
             count["pmc"] += 1
 
             sample_position += 1
             position += 1
         print("Finished writing to output files.")
-        endprocess = perf_counter()
+        end_time = perf_counter()
 
         print(
             f"""{count['total']} entries processed in 
 
-            {(endprocess - startprocess):.2f} seconds."""
+            {(end_time - start_time):.2f} seconds."""
         )
 
-        print(f"{count['upw']} entries saved to {jsonlfile}")
-        print(f"{count['pmc']} entries saved to {txtfile}")
+        print(f"{count['upw']} entries saved to {jsonl_file}")
+        print(f"{count['pmc']} entries saved to {txt_file}")
         print(f"{count['discard']} entries discarded due to missing information")
         print(f"{count['no_pdf']} entries discarded due to unavailable pdf downloads")
     # compresses jsonl to jsonl.gz
-    with open(jsonlfile, "rb") as tocompress:
-        jsonlgzfile = f"{jsonlfile}.gz"
-        with gzip.open(jsonlgzfile, "wb") as compressfile:
-            shutil.copyfileobj(tocompress, compressfile)
-    print(f"{os.path.basename(jsonlfile)} compressed to .gz")
+    with open(jsonl_file, "rb") as to_compress:
+        jsonlgz_file = f"{jsonl_file}.gz"
+        with gzip.open(jsonlgz_file, "wb") as compress_file:
+            shutil.copyfileobj(to_compress, compress_file)
+    print(f"{os.path.basename(jsonl_file)} compressed to .gz")
 
     # deletes jsonl file
-    os.remove(jsonlfile)
+    os.remove(jsonl_file)
 
     # removes txt file if empty
     if count["pmc"] == 0:
-        os.remove(txtfile)
+        os.remove(txt_file)
     # removes dump file if empty
     if count["no_pdf"] == 0:
         os.remove(dump_path)
@@ -255,17 +256,18 @@ if __name__ == "__main__":
 
     csv_path = Path(f"./reports/{args.field}/{args.field}Report.csv")
 
-    with open(csv_path, mode="w", encoding="utf-8") as reportfile:
-        csvwriter = csv.writer(reportfile, dialect="unix")
+    with open(csv_path, mode="w", encoding="utf-8") as report_file:
+        csv_writer = csv.writer(report_file, dialect="unix")
         header = ["Year", "UPW", "PMC", "NoPubMed", "NoPDF", "Total"]
-        csvwriter.writerow(header)
+        csv_writer.writerow(header)
         for y in range(args.startyear, args.endyear + 1, 1):
-            printlist = [y]
+            print_list = [y]
 
-            returnlist = unified_processor(
-                Path(f"./input/{args.field}/{args.field}{y}.csv"),
-                samplesize=args.samples,
+            return_list = unified_processor(
+                args.field,
+                y,
+                sample_size=args.samples,
                 email=args.email,
             )
-            printlist.extend(returnlist)
-            csvwriter.writerow(printlist)
+            print_list.extend(return_list)
+            csv_writer.writerow(print_list)
