@@ -1,8 +1,8 @@
 # unified-csv-processor
-Python utility to create file lists for [biblio-glutton-harvester](https://github.com/kermitt2/biblio-glutton-harvester) based on PubMed open access search results.
+Python utility to create file lists for [biblio-glutton-harvester](https://github.com/kermitt2/biblio-glutton-harvester) based on PubMed search results.
 * Uses CSV files available from [PubMed](https://pubmed.ncbi.nlm.nih.gov/) search results
 * Produces .jsonl.gz file lists to harvest files from the Unpaywall database
-* As a fallback, produces .txt file lists to harvest files from the PubMedCentral set for articles not available on the Unpaywall database
+* As a fallback, produces .txt file lists to harvest files from the PubMed Open Access Subset for articles not available on the Unpaywall database
 * Can be restricted to a set maximum sample size to randomly select a given number of articles from the CSV file(default 850)
 
 ## Requirements
