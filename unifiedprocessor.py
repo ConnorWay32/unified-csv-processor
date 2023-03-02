@@ -4,6 +4,7 @@ import gzip
 import json
 import os
 import shutil
+import string
 from pathlib import Path
 from random import sample
 from time import perf_counter
@@ -76,17 +77,21 @@ def pmc_request(pmc_id: str) -> dict:
 
 
 def unified_processor(
-    field: str,
-    year: int,
-    sample_size: int = 800,
+    csv_path,
+    sample_size: int = 850,
     email: str = "unpaywall_01@example.com",
 ):
     """Produces UPW and PMC format files for BGH
 
-    csvfile: path to PubMed format csv files.
+    csv_path: path to PubMed format csv files.
     email: email address for UPW calls
-    samplesize: sampling size
+    sample_size: sampling size
     """
+
+    file_name = str(os.path.basename(csv_path)).removesuffix(".csv")
+
+    # removes year from filename if present
+    field = file_name.translate(str.maketrans("", "", string.digits))
 
     if not os.path.exists(Path(f"./output/{field}")):
         os.makedirs(Path(f"./output/{field}"))
@@ -94,12 +99,11 @@ def unified_processor(
     if not os.path.exists(Path(f"./reports/{field}")):
         os.makedirs(Path(f"./reports/{field}"))
 
-    csv_file = Path(f"./input/{field}/{field}{year}.csv")
-    jsonl_file = Path(f"./output/{field}/{field}{year}-UPW.jsonl")
-    txt_file = Path(f"./output/{field}/{field}{year}-PMC.txt")
-    dump_path = Path(f"./reports/{field}/{field}{year}-dump.csv")
+    jsonl_file = Path(f"./output/{field}/{file_name}-UPW.jsonl")
+    txt_file = Path(f"./output/{field}/{file_name}-PMC.txt")
+    dump_path = Path(f"./reports/{field}/{file_name}-dump.csv")
 
-    line_count = fast_line_count(csv_file, True)
+    line_count = fast_line_count(csv_path, True)
 
     print(f"{line_count} entries.")
 
@@ -108,10 +112,10 @@ def unified_processor(
     selection: list[int] = sample(range(1, line_count + 2), sample_size)
     selection.sort()
 
-    print(f"Processing {sample_size} samples of {csv_file}")
+    print(f"Processing {sample_size} samples of {csv_path}")
     start_time = perf_counter()
 
-    with open(csv_file, "r", encoding="utf-8") as csv_file, jsonlines.open(
+    with open(csv_path, "r", encoding="utf-8") as csv_file, jsonlines.open(
         jsonl_file, mode="w"
     ) as jsonl_writer, open(dump_path, "w", encoding="utf-8") as dump_file, open(
         txt_file, "w", encoding="ascii"
@@ -254,9 +258,9 @@ if __name__ == "__main__":
     if not os.path.exists(Path(f"./reports/{args.field}")):
         os.makedirs(Path(f"./reports/{args.field}"))
 
-    csv_path = Path(f"./reports/{args.field}/{args.field}Report.csv")
+    report_path = Path(f"./reports/{args.field}/{args.field}Report.csv")
 
-    with open(csv_path, mode="w", encoding="utf-8") as report_file:
+    with open(report_path, mode="w", encoding="utf-8") as report_file:
         csv_writer = csv.writer(report_file, dialect="unix")
         header = ["Year", "UPW", "PMC", "NoPubMed", "NoPDF", "Total"]
         csv_writer.writerow(header)
@@ -264,8 +268,7 @@ if __name__ == "__main__":
             print_list = [y]
 
             return_list = unified_processor(
-                args.field,
-                y,
+                Path(f"./input/{args.field}/{args.field}{y}.csv"),
                 sample_size=args.samples,
                 email=args.email,
             )
